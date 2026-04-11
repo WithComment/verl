@@ -836,12 +836,7 @@ class vLLMReplica(RolloutReplica):
                 worker_cuda_visible_devices[node_rank * gpus_per_replica_node : (node_rank + 1) * gpus_per_replica_node]
             )
             node_id = worker_node_ids[node_rank * gpus_per_replica_node]
-            name = (
-                f"vllm_server_{self.replica_rank}_{node_rank}"
-                if not self.is_reward_model
-                else f"vllm_server_reward_{self.replica_rank}_{node_rank}"
-            )
-
+            name = f"{prefix}server_{self.replica_rank}_{node_rank}"
             server = self.server_class.options(
                 scheduling_strategy=ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
                     node_id=node_id,

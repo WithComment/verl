@@ -290,6 +290,7 @@ class RewardLoopManager:
         self.reward_loop_workers = []
         num_workers = self.config.reward.num_workers
         node_ids = [node["NodeID"] for node in ray.nodes() if node["Alive"] and node["Resources"].get("CPU", 0) > 0]
+        prefix = self.config.get("reward_loop_actor_name_prefix", "reward_loop")
 
         for i in range(num_workers):
             # Round-robin scheduling over the all nodes
@@ -297,7 +298,7 @@ class RewardLoopManager:
 
             self.reward_loop_workers.append(
                 self.reward_loop_workers_class.options(
-                    name=f"reward_loop_worker_{i}",
+                    name=f"{prefix}_worker_{i}",
                     scheduling_strategy=ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
                         node_id=node_id,
                         soft=True,
@@ -318,14 +319,17 @@ class RewardLoopManager:
         )
         outputs_flat = [item for sublist in outputs for item in sublist]
 
-        # compute rm score
+        # Compute rm score placement index.
+        # Prefer response_mask when available because custom training loops may concatenate
+        # multiple responses (e.g., y0/c/y1) and attention_mask no longer maps 1:1 to final responses.
         scores = [item["reward_score"] for item in outputs_flat]
-        prompt_length = data.batch["prompts"].size(1)
-        valid_response_length = data.batch["attention_mask"][:, prompt_length:].sum(dim=1)
         rm_scores = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
-        rm_scores[torch.arange(rm_scores.size(0)), valid_response_length - 1] = torch.tensor(
-            scores, dtype=torch.float32
-        )
+
+        response_mask = data.batch['response_mask']
+        positions = torch.arange(response_mask.size(1), device=response_mask.device).unsqueeze(0)
+        mask_long = response_mask.to(dtype=torch.long)
+        last_response_index = (positions * mask_long).max(dim=1).values
+        rm_scores[torch.arange(rm_scores.size(0)), last_response_index] = torch.tensor(scores, dtype=torch.float32)
         batch = TensorDict({"rm_scores": rm_scores}, batch_size=len(data))
 
         reward_extra_infos = [output.get("reward_extra_info", {}) for output in outputs_flat]

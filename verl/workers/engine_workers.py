@@ -450,6 +450,15 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         )
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def get_memory_info(self):
+        results = []
+        for i in range(torch.cuda.device_count()):
+            alloc = torch.cuda.memory_allocated(i) / 1e9
+            reserved = torch.cuda.memory_reserved(i) / 1e9
+            total = torch.cuda.get_device_properties(i).total_memory / 1e9
+            results.append(f"GPU[{i}] alloc={alloc:.2f}GB reserved={reserved:.2f}GB total={total:.2f}GB")
+        return results
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def set_loss_fn(self, loss_fn):
         self.actor.set_loss_fn(loss_fn=loss_fn)
 
@@ -464,15 +473,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         # 1. build reference model
         if "ref" in self.role:
-            # TODO: align ref config with actor config
-            with open_dict(self.config.ref):
-                self.config.ref.ppo_mini_batch_size = self.config.actor.ppo_mini_batch_size
-                self.config.ref.ppo_micro_batch_size = self.config.ref.pop("log_prob_micro_batch_size", None)
-                self.config.ref.ppo_micro_batch_size_per_gpu = self.config.ref.pop(
-                    "log_prob_micro_batch_size_per_gpu", None
-                )
-                self.config.ref.use_dynamic_bsz = self.config.ref.pop("log_prob_use_dynamic_bsz", False)
-                self.config.ref.ppo_max_token_len_per_gpu = self.config.ref.pop("log_prob_max_token_len_per_gpu", None)
             ref_config: ActorConfig = omega_conf_to_dataclass(self.config.ref)
 
             # The ref model does not need to enable MTP; force it to false.
