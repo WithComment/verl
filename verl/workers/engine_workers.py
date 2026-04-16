@@ -678,6 +678,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         self.base_sync_done = True
         set_expandable_segments(True)
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL, blocking=False)
+    async def wake_up_rollout(self):
+        """Wake rollout caches in hybrid mode without triggering a weight sync."""
+        if self.config.rollout.free_cache_engine:
+            await self.rollout.resume(tags=["weights", "kv_cache"])
+
     @register(dispatch_mode=Dispatch.DP_COMPUTE, blocking=False)
     def execute_checkpoint_engine(self, method: str, *args, **kwargs):
         """Execute checkpoint engine method.

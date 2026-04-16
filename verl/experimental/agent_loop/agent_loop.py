@@ -570,6 +570,31 @@ class AgentLoopWorker:
         """Perform post-processing operations on the output of each individual agent loop."""
         output.extra_fields["raw_prompt"] = kwargs["raw_prompt"]
 
+        prompt_ids = list(output.prompt_ids)
+        response_ids = list(output.response_ids)
+        response_mask_ids = list(output.response_mask)
+        response_logprobs = list(output.response_logprobs) if output.response_logprobs is not None else None
+
+        # Enforce configured max lengths before padding. tokenizer.pad does not truncate overlong sequences.
+        if len(prompt_ids) > self.rollout_config.prompt_length:
+            prompt_ids = prompt_ids[-self.rollout_config.prompt_length:]
+            logger.warning(
+                f"Prompt truncated to max length {self.rollout_config.prompt_length}. "
+                f"Original length was {len(output.prompt_ids)}."
+            )
+            print(f"Prompt truncated to max length {self.rollout_config.prompt_length}. Original length was {len(output.prompt_ids)}.")
+
+        max_response_length = self.rollout_config.response_length
+        if len(response_ids) > max_response_length:
+            response_ids = response_ids[:max_response_length]
+            response_mask_ids = response_mask_ids[:max_response_length]
+            response_logprobs = response_logprobs[:max_response_length]
+            logger.warning(
+                f"Response truncated to max length {max_response_length}. "
+                f"Original length was {len(output.response_ids)}."
+            )
+            print(f"Response truncated to max length {max_response_length}. Original length was {len(output.response_ids)}.")
+
         # Some AgentLoop may have already computed the reward score, e.g SWE-agent.
 
         # NOTE: consistent with the legacy batch version of generate_sequences that existed in the
@@ -593,7 +618,7 @@ class AgentLoopWorker:
         # TODO(wuxibin): remove padding and use tensordict.
         self.tokenizer.padding_side = "left"
         prompt_output = self.tokenizer.pad(
-            {"input_ids": output.prompt_ids},
+            {"input_ids": prompt_ids},
             padding="max_length",
             max_length=self.rollout_config.prompt_length,
             return_tensors="pt",
@@ -605,7 +630,7 @@ class AgentLoopWorker:
 
         self.tokenizer.padding_side = "right"
         response_output = self.tokenizer.pad(
-            {"input_ids": output.response_ids},
+            {"input_ids": response_ids},
             padding="max_length",
             max_length=self.rollout_config.response_length,
             return_tensors="pt",
@@ -616,7 +641,7 @@ class AgentLoopWorker:
             response_output["attention_mask"] = response_output["attention_mask"].unsqueeze(0)
 
         response_mask_output = self.tokenizer.pad(
-            {"input_ids": output.response_mask},
+            {"input_ids": response_mask_ids},
             padding="max_length",
             max_length=self.rollout_config.response_length,
             return_tensors="pt",
@@ -625,10 +650,10 @@ class AgentLoopWorker:
         if response_mask_output["input_ids"].dim() == 1:
             response_mask_output["input_ids"] = response_mask_output["input_ids"].unsqueeze(0)
 
-        response_logprobs = None
-        if output.response_logprobs is not None:
-            pad_size = self.rollout_config.response_length - len(output.response_logprobs)
-            response_logprobs = torch.tensor(output.response_logprobs + [0.0] * pad_size).unsqueeze(0)
+        response_logprobs_tensor = None
+        if response_logprobs is not None:
+            pad_size = self.rollout_config.response_length - len(response_logprobs)
+            response_logprobs_tensor = torch.tensor(response_logprobs + [0.0] * pad_size).unsqueeze(0)
 
         response_mask = response_mask_output["input_ids"] * response_output["attention_mask"]
         attention_mask = torch.cat([prompt_output["attention_mask"], response_output["attention_mask"]], dim=1)
@@ -650,7 +675,7 @@ class AgentLoopWorker:
             routed_experts = torch.zeros(1, total_length, layer_num, topk_num, dtype=experts_tensor.dtype)
 
             # Calculate start position: left padding means original prompt starts at the end
-            start_pos = prompt_output["input_ids"].shape[1] - len(output.prompt_ids)
+            start_pos = prompt_output["input_ids"].shape[1] - len(prompt_ids)
             end_pos = min(start_pos + length, total_length)
 
             # Add boundary checks for robustness
@@ -680,7 +705,7 @@ class AgentLoopWorker:
             position_ids=position_ids,
             response_mask=response_mask,
             attention_mask=attention_mask,
-            response_logprobs=response_logprobs,
+            response_logprobs=response_logprobs_tensor,
             routed_experts=routed_experts,
             multi_modal_inputs=multi_modal_inputs,
             multi_modal_data=output.multi_modal_data,

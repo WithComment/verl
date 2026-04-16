@@ -411,7 +411,7 @@ class vLLMHttpServer:
         server_args = ["serve", self.model_config.local_path] + build_cli_args_from_config(args)
 
         if self.replica_rank == 0:
-            pprint(server_args)
+            print(server_args)
 
         CMD_MODULES = [vllm.entrypoints.cli.serve]
         parser = FlexibleArgumentParser(description="vLLM CLI")
@@ -820,6 +820,7 @@ class vLLMReplica(RolloutReplica):
                     lambda self: (
                         ray.get_runtime_context().get_node_id(),
                         ray.get_runtime_context().get_accelerator_ids()[get_resource_name()][0],
+                        str(ray.get_runtime_context().get_actor_id()),
                     )
                 )
                 for worker in self.workers
@@ -827,6 +828,9 @@ class vLLMReplica(RolloutReplica):
         )
         worker_cuda_visible_devices = [worker_info[1] for worker_info in worker_infos]
         worker_node_ids = [worker_info[0] for worker_info in worker_infos]
+        worker_actor_ids = [worker_info[2] for worker_info in worker_infos]
+        # Use a replica-unique prefix to avoid actor name collisions across multiple managers.
+        prefix = f"vllm_{worker_actor_ids[0][:8]}_"
 
         # create server actor in each node with node affinity and cuda visible devices
         nnodes, gpus_per_replica_node = self.nnodes, self.gpus_per_replica_node

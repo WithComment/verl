@@ -399,6 +399,10 @@ class CheckpointEngineManager:
     async def wake_up_replicas(self):
         """Resume all rollout replicas: recover kv_cache and weights device memory."""
         await asyncio.gather(*[r.wake_up() for r in self.replicas])
+        
+    @auto_await
+    async def wake_up_hybrid_replicas(self):
+        ray.get(self.trainer.wake_up_rollout())
 
     @auto_await
     async def update_weights(self, global_steps: int = None):
