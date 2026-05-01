@@ -295,6 +295,7 @@ class AgentLoopBase(ABC):
         images: list[Image.Image] = None,
         videos: list[tuple[torch.Tensor, dict]] = None,
         remove_system_prompt: bool = False,
+        **kwargs
     ):
         """Apply chat template to messages with optional tools, images, and videos.
 
@@ -308,6 +309,12 @@ class AgentLoopBase(ABC):
         Returns:
             list[int]: Prompt token ids.
         """
+        kwargs_ = dict(OmegaConf.to_container(self.apply_chat_template_kwargs, resolve=True))
+        kwargs_.update(kwargs)
+        if kwargs_.get("continue_final_message", False):
+            kwargs_["add_generation_prompt"] = False
+        if "add_generation_prompt" not in kwargs_:
+            kwargs_["add_generation_prompt"] = True
         if self.processor is not None:
             raw_prompt = await self.loop.run_in_executor(
                 None,
@@ -315,9 +322,8 @@ class AgentLoopBase(ABC):
                     self.processor,
                     messages,
                     tools=tools,
-                    add_generation_prompt=True,
                     tokenize=False,
-                    **self.apply_chat_template_kwargs,
+                    **kwargs_,
                 ),
             )
 
@@ -344,9 +350,8 @@ class AgentLoopBase(ABC):
                     self.tokenizer,
                     messages,
                     tools=tools,
-                    add_generation_prompt=True,
                     tokenize=True,
-                    **self.apply_chat_template_kwargs,
+                    **kwargs_,
                 ),
             )
             prompt_ids = normalize_token_ids(tokenized_prompt)
@@ -451,7 +456,7 @@ class AgentLoopWorker:
             trace_config.get("max_samples_per_step_per_worker", None),
         )
 
-    async def generate_sequences(self, batch: DataProto) -> DataProto:
+    async def generate_sequences(self, batch: DataProto, chat_template_kwargs: dict[str, Any] | None = None) -> DataProto:
         """Generate sequences from agent loop.
 
         Args:
@@ -517,13 +522,21 @@ class AgentLoopWorker:
             batch.meta_info.get("global_steps", -1), index.tolist(), batch.meta_info.get("validate", False)
         )
 
+        kwargs_for_template = {} if chat_template_kwargs is None else chat_template_kwargs
+
         tasks = []
         for i in range(len(batch)):
             trace_this_sample = i in traced_indices
             kwargs = {k: v[i] for k, v in batch.non_tensor_batch.items()}
             tasks.append(
                 asyncio.create_task(
-                    self._run_agent_loop(sampling_params, trajectory_info[i], trace=trace_this_sample, **kwargs)
+                    self._run_agent_loop(
+                        sampling_params,
+                        trajectory_info[i],
+                        trace=trace_this_sample,
+                        chat_template_kwargs=kwargs_for_template,
+                        **kwargs,
+                    )
                 )
             )
         outputs = await asyncio.gather(*tasks)
@@ -539,6 +552,7 @@ class AgentLoopWorker:
         *,
         agent_name: str,
         trace: bool = True,
+        chat_template_kwargs: dict[str, Any],
         **kwargs,
     ) -> _InternalAgentLoopOutput:
         with rollout_trace_attr(
@@ -563,7 +577,7 @@ class AgentLoopWorker:
                 dataset_cls=self.dataset_cls,
                 data_config=DictConfigWrap(self.config.data),
             )
-            output: AgentLoopOutput = await agent_loop.run(sampling_params, **kwargs)
+            output: AgentLoopOutput = await agent_loop.run(sampling_params, chat_template_kwargs, **kwargs)
             return await self._agent_loop_postprocess(output, **kwargs)
 
     async def _agent_loop_postprocess(self, output, **kwargs) -> _InternalAgentLoopOutput:
@@ -1052,7 +1066,7 @@ class AgentLoopManager:
         )
 
     @auto_await
-    async def generate_sequences(self, prompts: DataProto) -> DataProto:
+    async def generate_sequences(self, prompts: DataProto, chat_template_kwargs: dict[str, Any] | None = None) -> DataProto:
         """Split input batch and dispatch to agent loop workers.
 
         Args:
@@ -1063,9 +1077,11 @@ class AgentLoopManager:
         """
 
         chunkes = prompts.chunk(len(self.agent_loop_workers))
+        kwargs_for_template = {} if chat_template_kwargs is None else chat_template_kwargs
+
         outputs = await asyncio.gather(
             *[
-                worker.generate_sequences.remote(chunk)
+                worker.generate_sequences.remote(chunk, kwargs_for_template)
                 for worker, chunk in zip(self.agent_loop_workers, chunkes, strict=True)
             ]
         )

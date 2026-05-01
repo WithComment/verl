@@ -33,7 +33,7 @@ class SingleTurnAgentLoop(AgentLoopBase):
         self.prompt_length = self.rollout_config.prompt_length
         self.response_length = self.rollout_config.response_length
 
-    async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
+    async def run(self, sampling_params: dict[str, Any], chat_template_kwargs, **kwargs) -> AgentLoopOutput:
         messages = list(kwargs["raw_prompt"])
 
         # 1. extract images and videos from messages
@@ -46,6 +46,7 @@ class SingleTurnAgentLoop(AgentLoopBase):
             messages,
             images=images,
             videos=videos,
+            **chat_template_kwargs
         )
 
         # 3. generate sequences

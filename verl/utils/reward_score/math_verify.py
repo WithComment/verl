@@ -24,13 +24,15 @@ def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0
     verify_func = math_metric(
         gold_extraction_target=(LatexExtractionConfig(),),
         pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
+        timeout_seconds=1,
     )
     ret_score = 0.0
 
     # Wrap the ground truth in \boxed{} format for verification
     ground_truth_boxed = "\\boxed{" + ground_truth + "}"
+    model_output_boxed = "\\boxed{" + model_output + "}"
     try:
-        ret_score, _ = verify_func([ground_truth_boxed], [model_output])
+        ret_score, _ = verify_func([ground_truth_boxed], [model_output_boxed])
     except Exception:
         pass
     except TimeoutException:
