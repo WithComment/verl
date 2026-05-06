@@ -50,6 +50,8 @@ class SingleTurnAgentLoop(AgentLoopBase):
         )
 
         # 3. generate sequences
+        if len(prompt_ids) > self.prompt_length:
+            prompt_ids = prompt_ids[-self.prompt_length:]
         metrics = {}
         with simple_timer("generate_sequences", metrics):
             output: TokenOutput = await self.server_manager.generate(
